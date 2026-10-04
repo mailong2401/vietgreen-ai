@@ -1,0 +1,2502 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+tests/
+  script-test.sh
+  test_api.py
+  test_formulas.py
+  test_helpers.py
+  test_validators.py
+.env.example
+.gitignore
+config.py
+db.py
+docker-compose.yml
+Dockerfile
+formulas.py
+ingest.py
+Modelfile
+pipeline.py
+prompt_multi.py
+prompt.py
+query.py
+requirements.txt
+schemas.py
+validators.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="tests/script-test.sh">
+python3 -c "
+from pypdf import PdfReader
+r = PdfReader('/home/long/btnpt.pdf')  # sửa path
+text = ''.join(p.extract_text() or '' for p in r.pages)
+
+print('Tổng ký tự:', len(text))
+print()
+
+kws = {
+    'scope 1': 0, 'scope 2': 0, 'scope 3': 0,
+    'phát thải': 0, 'tco2': 0, 'tco2e': 0,
+    'kwh': 0, 'điện': 0, 'năng lượng': 0,
+    'nước': 0, 'm3': 0,
+    'chất thải': 0, 'tấn': 0, 'tái chế': 0,
+    'sản lượng': 0, 'sản xuất': 0,
+    'nhà cung cấp': 0,
+}
+for kw in kws:
+    c = text.lower().count(kw.lower())
+    status = '✅' if c >= 3 else ('⚠️' if c > 0 else '❌')
+    print(f'{status} {kw:20s}: {c}')
+"
+</file>
+
+<file path="tests/test_api.py">
+from fastapi.testclient import TestClient
+from pipeline import app
+
+client = TestClient(app)
+
+
+def test_health_check():
+    r = client.get("/api/v1/health")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert "qdrant_collection" in data
+
+
+def test_metric_not_found():
+    r = client.get("/api/v1/metrics/999999")
+    assert r.status_code == 404
+
+
+def test_process_document_rejects_non_pdf():
+    files = {"file": ("test.txt", b"hello", "text/plain")}
+    r = client.post("/api/v1/process-document", files=files)
+    assert r.status_code == 400
+    assert "PDF" in r.json()["detail"]
+
+
+def test_process_document_rejects_empty():
+    files = {"file": ("test.pdf", b"", "application/pdf")}
+    r = client.post("/api/v1/process-document", files=files)
+    assert r.status_code == 400
+    assert "rỗng" in r.json()["detail"]
+
+
+def test_process_document_rejects_html_disguised_as_pdf():
+    files = {"file": ("fake.pdf", b"<!DOCTYPE html><html></html>", "application/pdf")}
+    r = client.post("/api/v1/process-document", files=files)
+    assert r.status_code == 400
+    assert "HTML" in r.json()["detail"]
+</file>
+
+<file path="tests/test_formulas.py">
+import pytest
+from formulas import (
+    compute_total_emissions, compute_reduction_pct,
+    compute_renewable_pct, compute_water_recycling_pct,
+    compute_waste_recycling_pct, compute_vgpi,
+    compute_all_derived,
+)
+
+
+def test_total_emissions():
+    e = {"scope1_tco2e": 100, "scope2_tco2e": 200, "scope3_tco2e": 300}
+    assert compute_total_emissions(e) == 600.0
+
+
+def test_reduction_pct():
+    e = {"baseline_total_tco2e": 1000}
+    assert compute_reduction_pct(e, 700) == 30.0
+    assert compute_reduction_pct(e, 1000) == 0.0
+    assert compute_reduction_pct({"baseline_total_tco2e": 0}, 500) == 0.0
+
+
+def test_renewable_pct():
+    assert compute_renewable_pct({"total_kwh": 1000, "renewable_kwh": 250}) == 25.0
+    assert compute_renewable_pct({"total_kwh": 0, "renewable_kwh": 100}) == 0.0
+
+
+def test_water_recycling_pct():
+    assert compute_water_recycling_pct({"consumption_m3": 1000, "recycled_m3": 600}) == 60.0
+
+
+def test_waste_recycling_pct():
+    assert compute_waste_recycling_pct({"total_ton": 100, "recycled_ton": 80}) == 80.0
+
+
+def test_vgpi_formula():
+    """VGPI = 0.20*E + 0.25*C + 0.20*W + 0.15*R + 0.20*S"""
+    vgpi = compute_vgpi(
+        energy_efficiency_score=80,
+        carbon_reduction_score=90,
+        waste_circularity_score=70,
+        renewable_energy_score=50,
+        supply_chain_score=60,
+    )
+    expected = 0.20*80 + 0.25*90 + 0.20*70 + 0.15*50 + 0.20*60
+    assert vgpi == round(expected, 2)
+    # = 16 + 22.5 + 14 + 7.5 + 12 = 72.0
+
+
+def test_compute_all_derived_full():
+    raw = {
+        "company": {
+            "name": "Test Corp",
+            "production_output_ton": 1000,
+        },
+        "reporting": {"year": 2026},
+        "emissions": {
+            "scope1_tco2e": 100,
+            "scope2_tco2e": 200,
+            "scope3_tco2e": 300,
+            "baseline_total_tco2e": 1000,
+        },
+        "energy": {
+            "total_kwh": 10000,
+            "renewable_kwh": 3000,
+        },
+        "water": {"consumption_m3": 5000, "recycled_m3": 3000},
+        "waste": {"total_ton": 100, "recycled_ton": 80, "landfill_ton": 20},
+        "supply_chain": {
+            "local_sourcing_pct": 60,
+            "certified_suppliers_count": 5,
+            "total_suppliers_count": 10,
+            "sustainable_packaging_pct": 40,
+        },
+    }
+    result = compute_all_derived(raw)
+
+    # Kiểm tra
+    assert result["total_tco2e"] == 600.0
+    assert result["reduction_pct"] == 40.0
+    assert result["renewable_pct"] == 30.0
+    assert result["water_recycling_rate"] == 60.0
+    assert result["waste_recycling_rate"] == 80.0
+    assert result["certified_supplier_pct"] == 50.0
+    assert 0 <= result["vgpi_score"] <= 100
+</file>
+
+<file path="tests/test_helpers.py">
+from datetime import date
+from decimal import Decimal
+
+from pipeline import _safe_float, _safe_int, _parse_date, _serialize_row
+
+
+def test_safe_float_basic():
+    assert _safe_float(85) == 85.0
+    assert _safe_float("85.5") == 85.5
+    assert _safe_float("85%") == 85.0
+    assert _safe_float("1,200") == 1200.0
+    assert _safe_float(None) == 0.0
+    assert _safe_float("abc") == 0.0
+    assert _safe_float("-10.5") == -10.5
+
+
+def test_safe_int_basic():
+    assert _safe_int(85) == 85
+    assert _safe_int("85.7") == 85
+    assert _safe_int(None) is None
+    assert _safe_int("abc") is None
+
+
+def test_parse_date_formats():
+    assert _parse_date("2026-03-15") == date(2026, 3, 15)
+    assert _parse_date("15/03/2026") == date(2026, 3, 15)
+    assert _parse_date("2026/03/15") == date(2026, 3, 15)
+    assert _parse_date("15-03-2026") == date(2026, 3, 15)
+    assert _parse_date("Unknown") is None
+    assert _parse_date(None) is None
+    assert _parse_date("invalid") is None
+
+
+def test_serialize_row():
+    row = {
+        "id": 1,
+        "audit_date": date(2026, 3, 15),
+        "revenue_vnd": Decimal("250000000000.00"),
+        "company_name": "ABC",
+    }
+    out = _serialize_row(row)
+    assert out["audit_date"] == "2026-03-15"
+    assert out["revenue_vnd"] == 250000000000.0
+    assert out["id"] == 1
+    assert out["company_name"] == "ABC"
+</file>
+
+<file path="tests/test_validators.py">
+from validators import validate_consistency
+
+
+def test_no_warnings_for_clean_data():
+    computed = {
+        "emissions_raw": {"scope1_tco2e": 100, "scope2_tco2e": 200, "scope3_tco2e": 300},
+        "total_tco2e": 600,
+        "reduction_pct": 40,
+        "energy_raw": {"total_kwh": 1000, "renewable_kwh": 300},
+        "water_raw": {"consumption_m3": 100, "recycled_m3": 60},
+        "waste_raw": {"total_ton": 100, "recycled_ton": 80, "landfill_ton": 20},
+        "vgpi_score": 75,
+        "company": {"production_output_ton": 1000},
+    }
+    assert validate_consistency(computed) == []
+
+
+def test_warns_scope_mismatch():
+    computed = {
+        "emissions_raw": {"scope1_tco2e": 100, "scope2_tco2e": 200, "scope3_tco2e": 300},
+        "total_tco2e": 1000,  # Sai — phải là 600
+        "reduction_pct": 40,
+        "energy_raw": {}, "water_raw": {}, "waste_raw": {},
+        "vgpi_score": 75, "company": {},
+    }
+    warnings = validate_consistency(computed)
+    assert any("Scope" in w for w in warnings)
+
+
+def test_warns_renewable_exceeds_total():
+    computed = {
+        "emissions_raw": {},
+        "total_tco2e": 0,
+        "reduction_pct": 0,
+        "energy_raw": {"total_kwh": 100, "renewable_kwh": 200},  # Sai
+        "water_raw": {}, "waste_raw": {},
+        "vgpi_score": 50, "company": {},
+    }
+    warnings = validate_consistency(computed)
+    assert any("renewable_kwh" in w for w in warnings)
+</file>
+
+<file path=".env.example">
+# Copy thành .env và điền giá trị thật
+POSTGRES_DB=vietgreen_db
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=CHANGE_ME_STRONG_PASSWORD
+PG_HOST_PORT=5432
+
+QDRANT_HTTP_PORT=6333
+QDRANT_GRPC_PORT=6334
+QDRANT_VOLUME=qdrant_data
+POSTGRES_VOLUME=postgres_data
+
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=vietgreen_documents
+EMBED_DIM=768
+
+OLLAMA_EXTRACT_MODEL=vietgreen-ai
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_CHAT_MODEL=vietgreen-ai
+
+PG_DBNAME=vietgreen_db
+PG_USER=postgres
+PG_PASSWORD=CHANGE_ME
+PG_HOST=localhost
+PG_PORT=5432
+
+MAX_TEXT_CHARS_FOR_LLM=12000
+CHUNK_SIZE=500
+MAX_CHUNKS=200
+EMBED_CONCURRENCY=4
+RAG_TOP_K=3
+RAG_SCORE_THRESHOLD=0.5
+</file>
+
+<file path=".gitignore">
+.env
+.env.local
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+*.log
+data/
+qdrant_storage/
+</file>
+
+<file path="config.py">
+import os
+import warnings
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ---------- Qdrant ----------
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "vietgreen_documents")
+QDRANT_BATCH_SIZE = int(os.getenv("QDRANT_BATCH_SIZE", "50"))
+EMBED_DIM = int(os.getenv("EMBED_DIM", "768"))
+
+# ---------- Ollama ----------
+OLLAMA_EXTRACT_MODEL = os.getenv("OLLAMA_EXTRACT_MODEL", "vietgreen-ai")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "vietgreen-ai")
+
+# ---------- PostgreSQL ----------
+DB_CONFIG = {
+    "dbname": os.getenv("PG_DBNAME", "vietgreen_db"),
+    "user": os.getenv("PG_USER", "postgres"),
+    "password": os.getenv("PG_PASSWORD", "yourpassword"),
+    "host": os.getenv("PG_HOST", "localhost"),
+    "port": os.getenv("PG_PORT", "5432"),
+}
+
+# ---------- Pipeline tuning ----------
+# num_ctx của model đang là 32768 token. Văn bản tiếng Việt (nhiều dấu)
+# trung bình ~2.5-3.5 ký tự/token, nên 70.000 ký tự ≈ 20.000-28.000 token
+# — vẫn còn dư chỗ cho phần prompt instructions + num_predict=3072.
+# Nếu đổi model/num_ctx, hãy tính lại và chỉnh qua biến môi trường thay vì sửa code.
+MAX_TEXT_CHARS_FOR_LLM = int(os.getenv("MAX_TEXT_CHARS_FOR_LLM", "70000"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
+MAX_CHUNKS = int(os.getenv("MAX_CHUNKS", "200"))
+EMBED_CONCURRENCY = int(os.getenv("EMBED_CONCURRENCY", "4"))
+
+# Số vùng (bucket) chia văn bản theo vị trí khi lấy mẫu trải đều (stratified)
+# trong _extract_relevant_text — xem pipeline.py
+RELEVANCE_NUM_BUCKETS = int(os.getenv("RELEVANCE_NUM_BUCKETS", "10"))
+
+# ---------- OCR fallback cho trang PDF dạng ảnh/scan ----------
+# Trang có ít hơn ngần này ký tự text trích được qua pypdf sẽ bị nghi là
+# ảnh/scan và (nếu bật) được OCR lại bằng pytesseract.
+OCR_MIN_TEXT_CHARS_PER_PAGE = int(os.getenv("OCR_MIN_TEXT_CHARS_PER_PAGE", "50"))
+ENABLE_OCR_FALLBACK = os.getenv("ENABLE_OCR_FALLBACK", "true").lower() == "true"
+
+# ---------- Debug ----------
+# Bật để ghi text_sample (đoạn văn bản thật sự đưa cho LLM) ra file,
+# kiểm tra bằng mắt xem có chứa số liệu thật không.
+DEBUG_DUMP_TEXT_SAMPLE = os.getenv("DEBUG_DUMP_TEXT_SAMPLE", "false").lower() == "true"
+DEBUG_DUMP_DIR = os.getenv("DEBUG_DUMP_DIR", "/tmp/vietgreen_debug")
+
+# ---------- RAG ----------
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
+RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.5"))
+
+# ---------- Validate ----------
+if DB_CONFIG["password"] in ("yourpassword", "CHANGE_ME", "CHANGE_ME_STRONG_PASSWORD", ""):
+    warnings.warn(
+        "⚠️  PG_PASSWORD đang dùng giá trị mặc định — KHÔNG an toàn cho production!",
+        stacklevel=2,
+    )
+</file>
+
+<file path="db.py">
+import logging
+import time
+import psycopg2
+from psycopg2 import pool
+from contextlib import contextmanager
+from config import DB_CONFIG
+
+logger = logging.getLogger("vietgreen_db")
+pg_pool = None
+
+
+def _create_schema(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS esg_metrics (
+            id SERIAL PRIMARY KEY,
+
+            -- company
+            company_name VARCHAR(255),
+            tax_code VARCHAR(50),
+            industry VARCHAR(150),
+            industry_code VARCHAR(50),
+            facility_name VARCHAR(255),
+            employee_count INT,
+            revenue_vnd NUMERIC(20, 2),
+            production_output_ton NUMERIC(15, 2),
+
+            -- reporting
+            reporting_year INT,
+            reporting_period VARCHAR(50),
+            reporting_standard VARCHAR(150),
+            baseline_year INT,
+
+            -- VGPI breakdown (DERIVED)
+            vgpi_score FLOAT,
+            energy_efficiency FLOAT,
+            co2_reduction FLOAT,
+            waste_circularity FLOAT,
+            renewable_energy_pct FLOAT,
+            supply_chain_sustainability FLOAT,
+
+            -- emissions
+            scope1_tco2e FLOAT,
+            scope2_tco2e FLOAT,
+            scope3_tco2e FLOAT,
+            total_tco2e FLOAT,
+            baseline_total_tco2e FLOAT,
+            reduction_pct FLOAT,
+            intensity_tco2e_per_ton FLOAT,
+
+            -- energy
+            total_kwh FLOAT,
+            grid_kwh FLOAT,
+            renewable_kwh FLOAT,
+            energy_renewable_pct FLOAT,
+            energy_intensity_kwh_per_ton FLOAT,
+
+            -- water
+            water_consumption_m3 FLOAT,
+            water_recycled_m3 FLOAT,
+            water_recycling_rate FLOAT,
+
+            -- waste
+            waste_total_ton FLOAT,
+            waste_recycled_ton FLOAT,
+            waste_landfill_ton FLOAT,
+            hazardous_waste_ton FLOAT,
+            waste_recycling_rate FLOAT,
+
+            -- supply chain
+            local_sourcing_pct FLOAT,
+            certified_suppliers_count INT,
+            total_suppliers_count INT,
+            sustainable_packaging_pct FLOAT,
+
+            -- audit
+            audit_by VARCHAR(255),
+            audit_standard VARCHAR(150),
+            audit_report_number VARCHAR(150),
+            audit_date DATE,
+            audit_valid_until DATE,
+            verification_level VARCHAR(50),
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS certificates (
+            id SERIAL PRIMARY KEY,
+            metric_id INT REFERENCES esg_metrics(id) ON DELETE CASCADE,
+            cert_type VARCHAR(150),
+            cert_number VARCHAR(150),
+            expiry_date DATE
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id BIGSERIAL PRIMARY KEY,
+            action VARCHAR(100),
+            entity_type VARCHAR(50),
+            entity_id INT,
+            detail JSONB,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_esg_tax_code ON esg_metrics(tax_code);
+        CREATE INDEX IF NOT EXISTS idx_esg_industry ON esg_metrics(industry);
+        CREATE INDEX IF NOT EXISTS idx_esg_year ON esg_metrics(reporting_year);
+        CREATE INDEX IF NOT EXISTS idx_esg_company ON esg_metrics(company_name);
+        CREATE INDEX IF NOT EXISTS idx_esg_vgpi ON esg_metrics(vgpi_score DESC);
+        CREATE INDEX IF NOT EXISTS idx_cert_metric ON certificates(metric_id);
+        CREATE INDEX IF NOT EXISTS idx_cert_expiry ON certificates(expiry_date);
+    """)
+
+
+def init_postgres_db(max_retries: int = 5, delay: int = 3):
+    global pg_pool
+    for attempt in range(1, max_retries + 1):
+        try:
+            pg_pool = psycopg2.pool.SimpleConnectionPool(1, 10, **DB_CONFIG)
+            conn = pg_pool.getconn()
+            with conn.cursor() as cur:
+                _create_schema(cur)
+            conn.commit()
+            pg_pool.putconn(conn)
+            logger.info("PostgreSQL schema sẵn sàng.")
+            return
+        except Exception as e:
+            logger.warning(f"Lần {attempt}/{max_retries} - Lỗi kết nối: {e}")
+            if attempt == max_retries:
+                logger.error("Hết retry, PostgreSQL không khả dụng.")
+                pg_pool = None
+            else:
+                time.sleep(delay)
+
+
+@contextmanager
+def get_pg_conn():
+    if pg_pool is None:
+        raise RuntimeError("PostgreSQL chưa được khởi tạo.")
+    conn = pg_pool.getconn()
+    try:
+        yield conn
+    finally:
+        pg_pool.putconn(conn)
+</file>
+
+<file path="docker-compose.yml">
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: vietgreen-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - ${QDRANT_VOLUME:-qdrant_data}:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - vietgreen-net
+
+  postgres:
+    image: postgres:17
+    container_name: vietgreen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vietgreen_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yourpassword}
+    ports:
+      - "${PG_HOST_PORT:-5432}:5432"
+    volumes:
+      - ${POSTGRES_VOLUME:-postgres_data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-vietgreen_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - vietgreen-net
+
+volumes:
+  qdrant_data:
+    name: ${QDRANT_VOLUME:-qdrant_data}
+  postgres_data:
+    name: ${POSTGRES_VOLUME:-postgres_data}
+
+networks:
+  vietgreen-net:
+    name: vietgreen-net
+    driver: bridge
+</file>
+
+<file path="Dockerfile">
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+CMD ["uvicorn", "pipeline:app", "--host", "0.0.0.0", "--port", "8000"]
+</file>
+
+<file path="formulas.py">
+"""Công thức tính toán cho VietGreen.
+Mọi chỉ số phái sinh đều tính ở đây, KHÔNG copy từ LLM.
+"""
+from typing import Dict, Any, Optional
+import logging
+
+logger = logging.getLogger("vietgreen_formulas")
+
+
+# ============================================================
+# 1. EMISSIONS
+# ============================================================
+def compute_total_emissions(e: Dict[str, float]) -> float:
+    """Tổng phát thải = Scope 1 + Scope 2 + Scope 3."""
+    return round(
+        e.get("scope1_tco2e", 0)
+        + e.get("scope2_tco2e", 0)
+        + e.get("scope3_tco2e", 0),
+        2
+    )
+
+
+def compute_reduction_pct(e: Dict[str, float], total: float) -> float:
+    """% giảm phát thải so với baseline."""
+    baseline = e.get("baseline_total_tco2e", 0)
+    if baseline <= 0:
+        return 0.0
+    return round((baseline - total) / baseline * 100, 2)
+
+
+def compute_carbon_intensity(total_tco2e: float, output_ton: float) -> float:
+    """Cường độ carbon (tCO2e/tấn sản phẩm)."""
+    if output_ton <= 0:
+        return 0.0
+    return round(total_tco2e / output_ton, 4)
+
+
+# ============================================================
+# 2. ENERGY
+# ============================================================
+def compute_renewable_pct(en: Dict[str, float]) -> float:
+    """% năng lượng tái tạo."""
+    total = en.get("total_kwh", 0)
+    if total <= 0:
+        return 0.0
+    renewable = en.get("renewable_kwh", 0)
+    return round(renewable / total * 100, 2)
+
+
+def compute_energy_intensity(total_kwh: float, output_ton: float) -> float:
+    """Cường độ năng lượng (kWh/tấn)."""
+    if output_ton <= 0:
+        return 0.0
+    return round(total_kwh / output_ton, 2)
+
+
+# ============================================================
+# 3. WATER
+# ============================================================
+def compute_water_recycling_pct(w: Dict[str, float]) -> float:
+    """% nước tái chế."""
+    consumed = w.get("consumption_m3", 0)
+    if consumed <= 0:
+        return 0.0
+    recycled = w.get("recycled_m3", 0)
+    return round(recycled / consumed * 100, 2)
+
+
+# ============================================================
+# 4. WASTE
+# ============================================================
+def compute_waste_recycling_pct(ws: Dict[str, float]) -> float:
+    """% chất thải tái chế."""
+    total = ws.get("total_ton", 0)
+    if total <= 0:
+        return 0.0
+    recycled = ws.get("recycled_ton", 0)
+    return round(recycled / total * 100, 2)
+
+
+def compute_landfill_rate(ws: Dict[str, float]) -> float:
+    """% chất thải chôn lấp."""
+    total = ws.get("total_ton", 0)
+    if total <= 0:
+        return 0.0
+    landfill = ws.get("landfill_ton", 0)
+    return round(landfill / total * 100, 2)
+
+
+# ============================================================
+# 5. SUPPLY CHAIN
+# ============================================================
+def compute_certified_supplier_pct(sc: Dict[str, Any]) -> float:
+    """% nhà cung cấp có chứng nhận."""
+    total = sc.get("total_suppliers_count", 0)
+    if total <= 0:
+        return 0.0
+    certified = sc.get("certified_suppliers_count", 0)
+    return round(certified / total * 100, 2)
+
+
+# ============================================================
+# 6. VGPI — CHỈ SỐ TỔNG HỢP
+# Trọng số theo PRD VietGreen:
+#   - Hiệu quả Năng lượng:      20%
+#   - Giảm Phát thải Carbon:    25%
+#   - Chất thải & Tuần hoàn:    20%
+#   - Năng lượng Tái tạo:       15%
+#   - Chuỗi Cung ứng Bền vững:  20%
+# ============================================================
+VGPI_WEIGHTS = {
+    "energy_efficiency": 0.20,
+    "carbon_reduction": 0.25,
+    "waste_circularity": 0.20,
+    "renewable_energy": 0.15,
+    "supply_chain": 0.20,
+}
+
+
+def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
+    """Kẹp giá trị vào [lo, hi]."""
+    return max(lo, min(hi, v))
+
+
+def _score_energy_efficiency(energy_intensity_kwh_per_ton: float,
+                              benchmark: float = 4000.0) -> float:
+    """
+    Điểm hiệu quả năng lượng (0-100).
+    Càng ít kWh/tấn → càng cao điểm.
+    benchmark = 4000 kWh/tấn (trung bình ngành).
+    """
+    if energy_intensity_kwh_per_ton <= 0:
+        return 0.0
+    # 0 kWh/tấn = 100 điểm; >= benchmark = 0 điểm
+    score = 100 * (1 - energy_intensity_kwh_per_ton / benchmark)
+    return round(_clamp(score), 2)
+
+
+def _score_carbon_reduction(reduction_pct: float) -> float:
+    """
+    Điểm giảm phát thải carbon (0-100).
+    Giảm 50% so baseline = 100 điểm.
+    """
+    if reduction_pct <= 0:
+        return 0.0
+    return round(_clamp(reduction_pct * 2), 2)  # 50% → 100 điểm
+
+
+def _score_waste_circularity(recycling_pct: float) -> float:
+    """Điểm tuần hoàn chất thải (0-100) = % tái chế."""
+    return round(_clamp(recycling_pct), 2)
+
+
+def _score_renewable_energy(renewable_pct: float) -> float:
+    """
+    Điểm năng lượng tái tạo (0-100).
+    RE100 (100% tái tạo) = 100 điểm.
+    """
+    return round(_clamp(renewable_pct), 2)
+
+
+def _score_supply_chain(certified_pct: float,
+                         local_pct: float,
+                         sustainable_pkg_pct: float) -> float:
+    """
+    Điểm chuỗi cung ứng (0-100).
+    = 0.5 * %NCC có chứng nhận + 0.25 * %nội địa + 0.25 * %bao bì bền vững
+    """
+    score = (
+        0.50 * certified_pct
+        + 0.25 * local_pct
+        + 0.25 * sustainable_pkg_pct
+    )
+    return round(_clamp(score), 2)
+
+
+def compute_vgpi(
+    energy_efficiency_score: float,
+    carbon_reduction_score: float,
+    waste_circularity_score: float,
+    renewable_energy_score: float,
+    supply_chain_score: float,
+) -> float:
+    """VGPI tổng hợp (0-100)."""
+    vgpi = (
+        VGPI_WEIGHTS["energy_efficiency"] * energy_efficiency_score
+        + VGPI_WEIGHTS["carbon_reduction"] * carbon_reduction_score
+        + VGPI_WEIGHTS["waste_circularity"] * waste_circularity_score
+        + VGPI_WEIGHTS["renewable_energy"] * renewable_energy_score
+        + VGPI_WEIGHTS["supply_chain"] * supply_chain_score
+    )
+    return round(vgpi, 2)
+
+
+# ============================================================
+# 7. HÀM TỔNG — tính tất cả từ RAW
+# ============================================================
+def compute_all_derived(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Input: dict với RAW data (company, emissions, energy, water, waste, supply_chain)
+    Output: dict với TẤT CẢ chỉ số (raw + derived + vgpi_breakdown)
+    """
+    company = data.get("company", {})
+    emissions = data.get("emissions", {})
+    energy = data.get("energy", {})
+    water = data.get("water", {})
+    waste = data.get("waste", {})
+    supply_chain = data.get("supply_chain", {})
+
+    output_ton = company.get("production_output_ton") or 0
+
+    # --- Emissions ---
+    total_emissions = compute_total_emissions(emissions)
+    reduction_pct = compute_reduction_pct(emissions, total_emissions)
+    carbon_intensity = compute_carbon_intensity(total_emissions, output_ton)
+
+    # --- Energy ---
+    renewable_pct = compute_renewable_pct(energy)
+    energy_intensity = compute_energy_intensity(
+        energy.get("total_kwh", 0), output_ton
+    )
+
+    # --- Water ---
+    water_recycling_pct = compute_water_recycling_pct(water)
+
+    # --- Waste ---
+    waste_recycling_pct = compute_waste_recycling_pct(waste)
+    landfill_rate = compute_landfill_rate(waste)
+
+    # --- Supply chain ---
+    certified_supplier_pct = compute_certified_supplier_pct(supply_chain)
+
+    # --- Điểm 5 trụ cột ---
+    score_energy = _score_energy_efficiency(energy_intensity)
+    score_carbon = _score_carbon_reduction(reduction_pct)
+    score_waste = _score_waste_circularity(waste_recycling_pct)
+    score_renewable = _score_renewable_energy(renewable_pct)
+    score_supply = _score_supply_chain(
+        certified_supplier_pct,
+        supply_chain.get("local_sourcing_pct", 0),
+        supply_chain.get("sustainable_packaging_pct", 0),
+    )
+
+    # --- VGPI ---
+    vgpi_score = compute_vgpi(
+        score_energy, score_carbon, score_waste, score_renewable, score_supply
+    )
+
+    logger.info(
+        f"VGPI={vgpi_score} | E={score_energy} C={score_carbon} "
+        f"W={score_waste} R={score_renewable} S={score_supply}"
+    )
+
+    return {
+        # RAW
+        "company": company,
+        "reporting": data.get("reporting", {}),
+        "emissions_raw": emissions,
+        "energy_raw": energy,
+        "water_raw": water,
+        "waste_raw": waste,
+        "supply_chain_raw": supply_chain,
+        "audit": data.get("audit", {}),
+
+        # DERIVED
+        "total_tco2e": total_emissions,
+        "reduction_pct": reduction_pct,
+        "intensity_tco2e_per_ton": carbon_intensity,
+        "renewable_pct": renewable_pct,
+        "intensity_kwh_per_ton": energy_intensity,
+        "water_recycling_rate": water_recycling_pct,
+        "waste_recycling_rate": waste_recycling_pct,
+        "landfill_rate": landfill_rate,
+        "certified_supplier_pct": certified_supplier_pct,
+
+        # VGPI BREAKDOWN
+        "vgpi_score": vgpi_score,
+        "energy_efficiency": score_energy,
+        "co2_reduction": score_carbon,
+        "waste_circularity": score_waste,
+        "renewable_energy_pct": score_renewable,
+        "supply_chain_sustainability": score_supply,
+    }
+</file>
+
+<file path="ingest.py">
+import uuid
+import logging
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+import ollama
+
+from config import (
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION,
+    OLLAMA_EMBED_MODEL, EMBED_DIM,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("vietgreen_ingest")
+
+client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+
+
+def ensure_collection():
+    if not client.collection_exists(collection_name=QDRANT_COLLECTION):
+        client.create_collection(
+            collection_name=QDRANT_COLLECTION,
+            vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+        )
+        logger.info(f"Đã tạo collection {QDRANT_COLLECTION}")
+
+
+def save_chunk_to_db(doc_id: int, text_chunk: str,
+                     company_name: str = "Unknown", chunk_index: int = 0):
+    if not text_chunk.strip():
+        logger.warning("Bỏ qua chunk rỗng")
+        return
+
+    embed = ollama.embeddings(model=OLLAMA_EMBED_MODEL, prompt=text_chunk)["embedding"]
+    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"vietgreen-{doc_id}-{chunk_index}"))
+
+    client.upsert(
+        collection_name=QDRANT_COLLECTION,
+        points=[
+            PointStruct(
+                id=point_id,
+                vector=embed,
+                payload={
+                    "doc_id": doc_id,
+                    "company_name": company_name,
+                    "content": text_chunk,
+                    "chunk_index": chunk_index,
+                },
+            )
+        ],
+    )
+    logger.info(f"Đã nạp chunk {chunk_index} của doc {doc_id}")
+
+
+if __name__ == "__main__":
+    ensure_collection()
+    save_chunk_to_db(
+        doc_id=1,
+        text_chunk="Chỉ số VGPI của Doanh nghiệp A năm 2026 đạt 85/100 điểm.",
+        company_name="Doanh nghiệp A",
+        chunk_index=0,
+    )
+</file>
+
+<file path="Modelfile">
+FROM qwen2.5:3b
+
+PARAMETER temperature 0.1
+PARAMETER num_ctx 16384
+
+SYSTEM """
+Bạn là chuyên gia trích xuất dữ liệu ESG. Trả JSON hợp lệ.
+"""
+</file>
+
+<file path="pipeline.py">
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError, PdfStreamError
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
+from decimal import Decimal
+from functools import partial
+import ollama
+import json, io, logging, uuid, anyio, re, os
+
+from config import (
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION, EMBED_DIM,
+    OLLAMA_EXTRACT_MODEL, OLLAMA_EMBED_MODEL,
+    MAX_TEXT_CHARS_FOR_LLM, CHUNK_SIZE, MAX_CHUNKS, EMBED_CONCURRENCY,
+    OCR_MIN_TEXT_CHARS_PER_PAGE, ENABLE_OCR_FALLBACK,
+    DEBUG_DUMP_TEXT_SAMPLE, DEBUG_DUMP_DIR, RELEVANCE_NUM_BUCKETS,
+)
+from db import init_postgres_db, get_pg_conn
+from schemas import EsgExtraction
+from prompt import EXTRACTION_PROMPT_TEMPLATE
+from prompt_multi import (
+    PROMPT_COMPANY,
+    PROMPT_EMISSIONS_ENERGY,
+    PROMPT_WATER_WASTE,
+    PROMPT_SUPPLY_AUDIT,
+)
+from formulas import compute_all_derived
+from validators import validate_consistency
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("vietgreen_pipeline")
+
+app = FastAPI(title="VietGreen Data Ingestion Pipeline")
+
+qdrant_client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+if not qdrant_client.collection_exists(QDRANT_COLLECTION):
+    qdrant_client.create_collection(
+        collection_name=QDRANT_COLLECTION,
+        vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+    )
+
+init_postgres_db()
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+def _call_llm_for_json(prompt: str, label: str) -> dict:
+    """Gọi LLM 1 lần, trả dict (rỗng nếu fail)."""
+    try:
+        resp = ollama.generate(
+            model=OLLAMA_EXTRACT_MODEL,
+            prompt=prompt,
+            format="json",
+            options={
+                "temperature": 0.0,
+                "num_ctx": 32768,
+                "num_predict": 3072,
+            },
+        )
+        raw = resp.get("response", "")
+        logger.info(f"[{label}] LLM RAW (len={len(raw)}): {raw[:150]!r}")
+
+        if not raw or len(raw) < 10:
+            logger.warning(f"[{label}] LLM trả rỗng")
+            return {}
+
+        parsed = _parse_json_safely(raw)
+        return parsed if isinstance(parsed, dict) else {}
+
+    except Exception as e:
+        logger.error(f"[{label}] Lỗi: {type(e).__name__}: {e}")
+        return {}
+
+
+_DIGIT_RE = re.compile(r"\d")
+
+#danh sách keyword
+_RELEVANCE_KEYWORDS = [
+    # ============================================================
+    # 1. EMISSIONS — Phát thải khí nhà kính
+    # ============================================================
+    # Scope
+    "scope 1", "scope 2", "scope 3",
+    "scope1", "scope2", "scope3",
+    "phạm vi 1", "phạm vi 2", "phạm vi 3",
+    "phạm vi phát thải 1", "phạm vi phát thải 2", "phạm vi phát thải 3",
+    # GHG
+    "phát thải", "khí nhà kính", "khi nha kinh", "ghg",
+    "phát thải khí nhà kính", "phat thai",
+    "kiểm kê khí nhà kính", "kiểm kê phat thai",
+    "giảm phát thải", "cắt giảm phát thải",
+    "phát thải ròng", "net zero", "net-zero", "carbon neutral",
+    # Đơn vị đo
+    "tco2", "tco2e", "tco₂", "tco₂e", "co2e", "co₂e", "co2", "co₂",
+    "tấn co2", "tấn co₂", "tấn co2e", "tấn co₂e",
+    "tấn co2 tương đương", "tấn co₂ tương đương",
+    "carbon", "dấu chân carbon", "carbon footprint",
+    "cường độ carbon", "carbon intensity",
+    "cường độ phát thải",
+    # Trực tiếp / gián tiếp
+    "phát thải trực tiếp", "phát thải gián tiếp",
+    "trực tiếp", "gián tiếp",
+
+    # ============================================================
+    # 2. ENERGY — Năng lượng
+    # ============================================================
+    # Đơn vị
+    "kwh", "mwh", "gwh", "gj", "tj", "mj",
+    "kilowatt", "megawatt", "gigawatt",
+    # Loại năng lượng
+    "điện năng", "điện năng tiêu thụ", "điện tiêu thụ",
+    "tổng điện", "tổng điện năng", "tổng tiêu thụ điện",
+    "năng lượng", "tổng năng lượng", "năng lượng tiêu thụ",
+    "tiêu thụ năng lượng", "sử dụng năng lượng",
+    "điện lưới", "grid", "điện quốc gia",
+    # Năng lượng tái tạo
+    "năng lượng tái tạo", "năng lượng tái sinh", "renewable",
+    "điện mặt trời", "điện mặt trời áp mái", "solar", "solar rooftop",
+    "điện gió", "wind", "phong điện",
+    "sinh khối", "biomass", "biogas",
+    "thủy điện", "hydro", "hydrogen", "hydrogen xanh",
+    # Hiệu quả
+    "hiệu quả năng lượng", "tiết kiệm năng lượng",
+    "cường độ năng lượng", "energy intensity",
+    "re100", "chứng nhận năng lượng",
+
+    # ============================================================
+    # 3. WATER — Nước
+    # ============================================================
+    # Đơn vị
+    "m3", "m³", "mét khối", "mét khối nước", "lít", "lit", "liter",
+    # Loại nước
+    "nước", "tổng nước", "tổng lượng nước",
+    "nước tiêu thụ", "nước sử dụng", "nước cấp",
+    "tiêu thụ nước", "sử dụng nước",
+    "nước ngầm", "nước mặt", "nước mưa",
+    "khai thác nước", "lượng nước khai thác",
+    # Tái chế
+    "nước tái chế", "nước tái sử dụng", "nước tuần hoàn",
+    "tái chế nước", "tái sử dụng nước",
+    "recycled water", "nước thu hồi", "nước quay vòng",
+    # Xử lý
+    "nước thải", "xử lý nước thải", "wastewater",
+    "xả thải nước", "nước xả",
+
+    # ============================================================
+    # 4. WASTE — Chất thải
+    # ============================================================
+    # Đơn vị
+    "tấn", "tân", "ton", "tấn/năm", "kg", "kilogram",
+    # Chất thải nói chung
+    "chất thải", "rác thải", "chất thải rắn", "chất thải sinh hoạt",
+    "chất thải công nghiệp", "chất thải sản xuất",
+    "phát sinh chất thải", "tổng chất thải",
+    # Chất thải nguy hại
+    "chất thải nguy hại", "ctnh", "hazardous waste",
+    "chất thải y tế", "chất thải độc hại",
+    # Tái chế / tuần hoàn
+    "tái chế", "thu hồi", "recycle", "tái sử dụng",
+    "tuần hoàn", "kinh tế tuần hoàn", "circular economy",
+    "tái chế chất thải", "tỷ lệ tái chế",
+    # Xử lý
+    "chôn lấp", "landfill", "đổ thải",
+    "đốt", "incineration", "đốt rác",
+    "ủ phân", "compost", "phân hủy sinh học",
+
+    # ============================================================
+    # 5. SUPPLY CHAIN — Chuỗi cung ứng
+    # ============================================================
+    # Nhà cung cấp
+    "nhà cung cấp", "ncc", "supplier", "vendors",
+    "đối tác cung ứng", "chuỗi cung ứng", "supply chain",
+    "nhà cung ứng", "nhà thầu",
+    "đánh giá nhà cung cấp", "đánh giá ncc",
+    # Nguyên liệu
+    "nguyên liệu", "nguyên vật liệu", "vật liệu đầu vào",
+    "raw material", "nguyên liệu đầu vào",
+    "nguyên liệu nội địa", "local sourcing",
+    "nguyên liệu bền vững", "sustainable material",
+    "nguyên liệu tái chế", "recycled material",
+    "nguyên liệu sinh học", "bio material",
+    # Bao bì
+    "bao bì", "packaging", "bao bì bền vững",
+    "bao bì tái chế", "bao bì thân thiện môi trường",
+    "bao bì sinh học", "biodegradable packaging",
+    # Chứng nhận NCC
+    "chứng nhận nhà cung cấp", "certified supplier",
+    "ncc được chứng nhận", "ncc xanh",
+
+    # ============================================================
+    # 6. AUDIT — Kiểm toán
+    # ============================================================
+    # Kiểm toán
+    "kiểm toán", "audit", "kiểm toán độc lập",
+    "kiểm toán bên thứ ba", "third party audit",
+    "xác minh", "verification", "chứng thực",
+    "đánh giá độc lập",
+    # Đơn vị kiểm toán
+    "deloitte", "kpmg", "pwc", "ernst & young", "ey",
+    "bsi", "tüv", "tuv", "tüv rheinland", "tüv norde",
+    "sgs", "bureau veritas", "intertek", "dnv",
+    "quatest", "quacert", "vinacontrol",
+    # Chuẩn
+    "iso 14064", "iso 14001", "iso 14067", "iso 14044", "iso 14046",
+    "iso 50001", "iso 9001", "iso 45001",
+    "gri", "gri standards", "gri 2021",
+    "aa1000", "aa1000as",
+    "ghg protocol", "ghg protocol corporate",
+    "tcfd", "sasb", "csrd", "cbam",
+    "tcvn", "tcvn iso",
+    # Chứng nhận
+    "chứng nhận", "certificate", "certified", "certification",
+    "chứng chỉ", "chứng nhận xanh", "green certification",
+    "ok compost", "tüv austria ok compost",
+    "fda", "reach", "rohs",
+
+    # ============================================================
+    # 7. COMPANY — Thông tin doanh nghiệp
+    # ============================================================
+    # Sản lượng
+    "sản lượng", "tổng sản lượng", "sản lượng sản xuất",
+    "sản lượng tiêu thụ", "sản lượng bán",
+    "sản xuất", "tổng sản xuất", "sản phẩm sản xuất",
+    "công suất", "công suất thiết kế", "công suất thực tế",
+    "output", "production output",
+    # Doanh thu
+    "doanh thu", "tổng doanh thu", "doanh thu thuần",
+    "net revenue", "revenue",
+    "doanh thu hợp nhất", "doanh thu năm",
+    # Nhân viên
+    "nhân viên", "số nhân viên", "tổng nhân viên",
+    "lao động", "số lao động", "người lao động",
+    "employees", "headcount", "nhân sự",
+    # Khác
+    "mã số thuế", "mst", "tax code",
+    "ngành nghề", "lĩnh vực kinh doanh", "ngành",
+    "nhà máy", "cơ sở sản xuất", "chi nhánh",
+    "vốn điều lệ", "vốn chủ sở hữu",
+    "tổng tài sản", "lợi nhuận",
+
+    # ============================================================
+    # 8. BÁO CÁO / CHUẨN MỰC
+    # ============================================================
+    "báo cáo thường niên", "báo cáo phát triển bền vững",
+    "báo cáo esg", "esg report", "sustainability report",
+    "annual report", "báo cáo tài chính hợp nhất",
+    "gri", "gri index", "chỉ số gri",
+    "mục tiêu phát triển bền vững", "sdg", "17 sdg",
+    "net zero", "net zero 2050", "phát thải ròng bằng 0",
+    "cam kết khí hậu", "paris agreement", "thỏa thuận paris",
+    "kiểm kê khí nhà kính", "ghg inventory",
+    "lộ trình giảm phát thải", "lộ trình net zero",
+    "kế hoạch hành động", "action plan",
+    "đóng góp do quốc gia tự quyết định", "ndc",
+]
+
+
+def _extract_relevant_text(
+    text: str,
+    max_chars: int = 40000,
+    num_buckets: int = RELEVANCE_NUM_BUCKETS,
+) -> str:
+    """Lọc đoạn có keyword ESG — lấy mẫu TRẢI ĐỀU toàn văn bản (stratified
+    theo vị trí), trong mỗi vùng ưu tiên đoạn có nhiều chữ số (khả năng
+    chứa số liệu thật) thay vì chỉ lấy các đoạn xuất hiện sớm trong tài
+    liệu rồi dừng (bug cũ: `break` khi vừa đủ max_chars khiến các báo cáo
+    dài bị cắt mất toàn bộ phần sau, nơi thường chứa bảng số liệu)."""
+    lines = text.split("\n")
+    n_lines = len(lines)
+    if n_lines == 0:
+        return text[:max_chars]
+
+    seen_spans = set()
+    candidates = []  # (bucket_idx, digit_score, snippet)
+
+    for i, line in enumerate(lines):
+        if any(kw in line.lower() for kw in _RELEVANCE_KEYWORDS):
+            start = max(0, i - 5)
+            end = min(n_lines, i + 6)
+            span = (start, end)
+            if span in seen_spans:
+                continue
+            seen_spans.add(span)
+            snippet = "\n".join(lines[start:end])
+            digit_score = len(_DIGIT_RE.findall(snippet))
+            bucket = min(num_buckets - 1, int(i / n_lines * num_buckets))
+            candidates.append((bucket, digit_score, snippet))
+
+    if not candidates:
+        logger.info(f"Không tìm thấy keyword → dùng {max_chars} ký tự đầu")
+        return text[:max_chars]
+
+    total_chars = sum(len(c[2]) for c in candidates)
+    if total_chars <= max_chars:
+        result_snippets = [c[2] for c in candidates]
+        logger.info(
+            f"Lọc relevant: {len(result_snippets)} đoạn, {total_chars} ký tự "
+            f"(lấy toàn bộ, không cần cắt)"
+        )
+        return "\n---\n".join(result_snippets)
+
+    # --- Stratified sampling theo vị trí + ưu tiên mật độ số trong từng vùng ---
+    buckets = {b: [] for b in range(num_buckets)}
+    for b, score, snippet in candidates:
+        buckets[b].append((score, snippet))
+    for b in buckets:
+        buckets[b].sort(key=lambda x: x[0], reverse=True)  # nhiều số trước
+
+    per_bucket_budget = max_chars // num_buckets
+    result_snippets = []
+    char_count = 0
+    leftover = 0
+
+    for b in range(num_buckets):
+        budget = per_bucket_budget + leftover
+        used = 0
+        remaining = []
+        for score, snippet in buckets[b]:
+            if used + len(snippet) <= budget and char_count + len(snippet) <= max_chars:
+                result_snippets.append(snippet)
+                used += len(snippet)
+                char_count += len(snippet)
+            else:
+                remaining.append((score, snippet))
+        leftover = budget - used  # ngân sách dư của vùng này chuyển sang vùng sau
+        buckets[b] = remaining
+
+    # Vòng 2: nếu còn dư ngân sách tổng, lấy thêm phần chưa dùng,
+    # ưu tiên điểm mật độ số cao nhất trên toàn tài liệu
+    if char_count < max_chars:
+        leftover_all = []
+        for b in range(num_buckets):
+            leftover_all.extend(buckets[b])
+        leftover_all.sort(key=lambda x: x[0], reverse=True)
+        for score, snippet in leftover_all:
+            if char_count + len(snippet) <= max_chars:
+                result_snippets.append(snippet)
+                char_count += len(snippet)
+
+    logger.info(
+        f"Lọc relevant: {len(result_snippets)}/{len(candidates)} đoạn, "
+        f"{char_count} ký tự (stratified, {num_buckets} vùng vị trí, ưu tiên mật độ số)"
+    )
+    return "\n---\n".join(result_snippets)
+
+
+def _ocr_pages(pdf_bytes: bytes, page_indices: list) -> str:
+    """OCR các trang nghi là ảnh/scan bằng pytesseract. Lỗi mềm — không raise,
+    chỉ log cảnh báo và trả chuỗi rỗng nếu thiếu dependency hoặc OCR fail."""
+    try:
+        from pdf2image import convert_from_bytes
+        import pytesseract
+    except ImportError:
+        logger.warning(
+            "⚠️  Thiếu pytesseract/pdf2image → không OCR được các trang nghi scan. "
+            "Cài: pip install pytesseract pdf2image  +  "
+            "apt install tesseract-ocr tesseract-ocr-vie poppler-utils"
+        )
+        return ""
+
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=200)
+    except Exception as e:
+        logger.error(f"OCR: lỗi convert PDF→ảnh: {e}")
+        return ""
+
+    ocr_chunks = []
+    for idx in page_indices:
+        if idx >= len(images):
+            continue
+        try:
+            ocr_text = pytesseract.image_to_string(images[idx], lang="vie+eng")
+            if ocr_text.strip():
+                ocr_chunks.append(ocr_text)
+                logger.info(f"  OCR trang {idx + 1}: {len(ocr_text)} ký tự")
+        except Exception as e:
+            logger.error(f"  OCR trang {idx + 1} lỗi: {e}")
+
+    return "\n".join(ocr_chunks)
+
+
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    if pdf_bytes.startswith(b"<!DOC") or pdf_bytes.startswith(b"<html"):
+        raise HTTPException(400, "File upload là HTML, không phải PDF.")
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if reader.is_encrypted:
+            try:
+                reader.decrypt("")
+            except Exception:
+                raise HTTPException(400, "PDF bảo vệ bằng mật khẩu.")
+
+        text = ""
+        scanned_pages = []
+        for idx, page in enumerate(reader.pages):
+            t = page.extract_text() or ""
+            # Trang gần như không có text trích được → nghi ảnh/scan
+            if len(t.strip()) < OCR_MIN_TEXT_CHARS_PER_PAGE:
+                scanned_pages.append(idx)
+            text += t + "\n"
+
+        if scanned_pages:
+            logger.warning(
+                f"⚠️  {len(scanned_pages)}/{len(reader.pages)} trang có vẻ là ảnh/scan "
+                f"(< {OCR_MIN_TEXT_CHARS_PER_PAGE} ký tự text/trang): "
+                f"{scanned_pages[:20]}{'...' if len(scanned_pages) > 20 else ''}"
+            )
+            if ENABLE_OCR_FALLBACK:
+                ocr_text = _ocr_pages(pdf_bytes, scanned_pages)
+                if ocr_text:
+                    text += "\n" + ocr_text
+                    logger.info(f"  → OCR bổ sung {len(ocr_text)} ký tự")
+            else:
+                logger.warning(
+                    "ENABLE_OCR_FALLBACK=false → bỏ qua OCR. Số liệu nằm trong "
+                    "các trang này (nếu có) sẽ KHÔNG được trích xuất."
+                )
+
+        return text
+    except HTTPException:
+        raise
+    except (PdfReadError, PdfStreamError) as e:
+        raise HTTPException(400, f"PDF không hợp lệ: {e}")
+    except Exception as e:
+        raise HTTPException(400, f"Lỗi đọc PDF: {e}")
+
+
+def _chunk_by_paragraphs(text: str, chunk_size: int) -> list:
+    """Chunk text theo đoạn văn, không cắt giữa câu."""
+    chunks = []
+    current = ""
+    for para in text.split("\n"):
+        if len(current) + len(para) + 1 > chunk_size:
+            if current.strip():
+                chunks.append(current.strip())
+            current = para + "\n"
+        else:
+            current += para + "\n"
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
+def _safe_float(v):
+    try:
+        if v is None:
+            return 0.0
+        if isinstance(v, str):
+            v = re.sub(r"[^\d.\-]", "", v) or 0
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(v):
+    try:
+        if v is None:
+            return None
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_date(v):
+    if not v or v == "Unknown":
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(str(v), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _serialize_row(row: dict) -> dict:
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, (date, datetime)):
+            out[k] = v.isoformat()
+        elif isinstance(v, Decimal):
+            out[k] = float(v)
+        else:
+            out[k] = v
+    return out
+
+
+# ============================================================
+# LLM EXTRACT — chỉ trích RAW
+# ============================================================
+def _parse_json_safely(raw: str) -> dict:
+    """Parse JSON, tự sửa nếu bị cắt."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSON lỗi lần 1: {e}")
+
+    try:
+        last_brace = raw.rfind("}")
+        if last_brace > 0:
+            return json.loads(raw[:last_brace + 1])
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        open_b = raw.count("{") - raw.count("}")
+        open_k = raw.count("[") - raw.count("]")
+        fixed = raw.rstrip().rstrip(",")
+        if fixed.count('"') % 2 == 1:
+            fixed += '"'
+        fixed += "]" * max(0, open_k)
+        fixed += "}" * max(0, open_b)
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    raise HTTPException(500, f"Không parse được JSON. Cuối: {raw[-200:]!r}")
+
+
+def _debug_dump_text_sample(text_sample: str) -> None:
+    """Ghi text_sample thực tế đưa cho LLM ra file, để kiểm tra bằng mắt
+    xem có chứa số liệu thật hay không. Bật qua .env: DEBUG_DUMP_TEXT_SAMPLE=true"""
+    if not DEBUG_DUMP_TEXT_SAMPLE:
+        return
+    try:
+        os.makedirs(DEBUG_DUMP_DIR, exist_ok=True)
+        fname = os.path.join(
+            DEBUG_DUMP_DIR, f"text_sample_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        )
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write(text_sample)
+        logger.info(f"🔍 DEBUG: đã dump text_sample ra {fname} ({len(text_sample)} ký tự)")
+    except Exception as e:
+        logger.warning(f"DEBUG dump text_sample lỗi: {e}")
+
+
+def extract_esg_json(text: str) -> dict:
+    """Multi-pass: gọi LLM 4 lần cho 4 nhóm field."""
+    text_sample = _extract_relevant_text(text, MAX_TEXT_CHARS_FOR_LLM)
+    _debug_dump_text_sample(text_sample)
+
+    logger.info("=" * 60)
+    logger.info(f"Multi-pass extraction: 4 lần gọi LLM (text={len(text_sample)} chars)")
+    logger.info("=" * 60)
+
+    # Pass 1: company + reporting
+    r1 = _call_llm_for_json(
+        PROMPT_COMPANY.format(report_text=text_sample),
+        label="1/4 company+reporting",
+    )
+
+    # Pass 2: emissions + energy
+    r2 = _call_llm_for_json(
+        PROMPT_EMISSIONS_ENERGY.format(report_text=text_sample),
+        label="2/4 emissions+energy",
+    )
+
+    # Pass 3: water + waste
+    r3 = _call_llm_for_json(
+        PROMPT_WATER_WASTE.format(report_text=text_sample),
+        label="3/4 water+waste",
+    )
+
+    # Pass 4: supply_chain + audit
+    r4 = _call_llm_for_json(
+        PROMPT_SUPPLY_AUDIT.format(report_text=text_sample),
+        label="4/4 supply+audit",
+    )
+
+    # Merge
+    merged = {
+        "company": r1.get("company", {}),
+        "reporting": r1.get("reporting", {}),
+        "emissions": r2.get("emissions", {}),
+        "energy": r2.get("energy", {}),
+        "water": r3.get("water", {}),
+        "waste": r3.get("waste", {}),
+        "supply_chain": r4.get("supply_chain", {}),
+        "audit": r4.get("audit", {}),
+    }
+
+    # Đảm bảo nested là dict
+    for key in merged:
+        if not isinstance(merged[key], dict):
+            merged[key] = {}
+
+    # Validate Pydantic
+    validated = EsgExtraction(**merged).model_dump()
+
+    # Đếm số nhóm có dữ liệu
+    def _has_value(d: dict) -> bool:
+        for v in d.values():
+            if isinstance(v, (int, float)) and v > 0:
+                return True
+            if isinstance(v, str) and v and v != "Unknown":
+                return True
+        return False
+
+    filled = sum(1 for k in ("company", "reporting", "emissions",
+                              "energy", "water", "waste",
+                              "supply_chain", "audit")
+                 if _has_value(validated.get(k, {})))
+
+    logger.info("=" * 60)
+    logger.info(f"✅ Multi-pass xong: {filled}/8 nhóm có dữ liệu")
+    logger.info(f"   company={validated['company']['name']}")
+    logger.info(f"   scope1={validated['emissions']['scope1_tco2e']} tCO2e")
+    logger.info(f"   total_kwh={validated['energy']['total_kwh']} kWh")
+    logger.info(f"   water={validated['water']['consumption_m3']} m3")
+    logger.info(f"   waste={validated['waste']['total_ton']} tấn")
+    logger.info("=" * 60)
+
+    return validated
+
+# ============================================================
+# SAVE POSTGRES — lưu RAW + DERIVED
+# ============================================================
+def save_to_postgres(raw_data: dict) -> tuple:
+    """
+    1. Tính derived từ raw
+    2. Validate consistency
+    3. Lưu RAW + DERIVED vào DB
+    Returns: (metric_id, computed_data, warnings)
+    """
+    # --- Tính toán ---
+    computed = compute_all_derived(raw_data)
+
+    # --- Validate ---
+    warnings = validate_consistency(computed)
+    if warnings:
+        logger.warning(f"Có {len(warnings)} cảnh báo consistency")
+
+    c = computed["company"]
+    r = computed["reporting"]
+    a = computed["audit"]
+
+    try:
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO esg_metrics (
+                        -- company
+                        company_name, tax_code, industry, industry_code,
+                        facility_name, employee_count, revenue_vnd, production_output_ton,
+                        -- reporting
+                        reporting_year, reporting_period, reporting_standard, baseline_year,
+                        -- VGPI breakdown (DERIVED)
+                        vgpi_score, energy_efficiency, co2_reduction,
+                        waste_circularity, renewable_energy_pct, supply_chain_sustainability,
+                        -- emissions (RAW + DERIVED)
+                        scope1_tco2e, scope2_tco2e, scope3_tco2e, total_tco2e,
+                        baseline_total_tco2e, reduction_pct, intensity_tco2e_per_ton,
+                        -- energy
+                        total_kwh, grid_kwh, renewable_kwh,
+                        energy_renewable_pct, energy_intensity_kwh_per_ton,
+                        -- water
+                        water_consumption_m3, water_recycled_m3, water_recycling_rate,
+                        -- waste
+                        waste_total_ton, waste_recycled_ton, waste_landfill_ton,
+                        hazardous_waste_ton, waste_recycling_rate,
+                        -- supply chain (RAW)
+                        local_sourcing_pct, certified_suppliers_count,
+                        total_suppliers_count, sustainable_packaging_pct,
+                        -- audit
+                        audit_by, audit_standard, audit_report_number,
+                        audit_date, audit_valid_until, verification_level
+                    ) VALUES (
+                        %s,%s,%s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,
+                        %s,%s,%s,
+                        %s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s
+                    ) RETURNING id;
+                """, (
+                    c["name"], c.get("tax_code"), c.get("industry"), c.get("industry_code"),
+                    c.get("facility_name"), _safe_int(c.get("employee_count")),
+                    _safe_float(c.get("revenue_vnd")), _safe_float(c.get("production_output_ton")),
+
+                    _safe_int(r.get("year")), r.get("period"), r.get("standard"),
+                    _safe_int(r.get("baseline_year")),
+
+                    computed["vgpi_score"], computed["energy_efficiency"],
+                    computed["co2_reduction"], computed["waste_circularity"],
+                    computed["renewable_energy_pct"], computed["supply_chain_sustainability"],
+
+                    _safe_float(computed["emissions_raw"].get("scope1_tco2e")),
+                    _safe_float(computed["emissions_raw"].get("scope2_tco2e")),
+                    _safe_float(computed["emissions_raw"].get("scope3_tco2e")),
+                    _safe_float(computed["total_tco2e"]),
+                    _safe_float(computed["emissions_raw"].get("baseline_total_tco2e")),
+                    _safe_float(computed["reduction_pct"]),
+                    _safe_float(computed["intensity_tco2e_per_ton"]),
+
+                    _safe_float(computed["energy_raw"].get("total_kwh")),
+                    _safe_float(computed["energy_raw"].get("grid_kwh")),
+                    _safe_float(computed["energy_raw"].get("renewable_kwh")),
+                    _safe_float(computed["renewable_pct"]),
+                    _safe_float(computed["intensity_kwh_per_ton"]),
+
+                    _safe_float(computed["water_raw"].get("consumption_m3")),
+                    _safe_float(computed["water_raw"].get("recycled_m3")),
+                    _safe_float(computed["water_recycling_rate"]),
+
+                    _safe_float(computed["waste_raw"].get("total_ton")),
+                    _safe_float(computed["waste_raw"].get("recycled_ton")),
+                    _safe_float(computed["waste_raw"].get("landfill_ton")),
+                    _safe_float(computed["waste_raw"].get("hazardous_ton")),
+                    _safe_float(computed["waste_recycling_rate"]),
+
+                    _safe_float(computed["supply_chain_raw"].get("local_sourcing_pct")),
+                    _safe_int(computed["supply_chain_raw"].get("certified_suppliers_count")),
+                    _safe_int(computed["supply_chain_raw"].get("total_suppliers_count")),
+                    _safe_float(computed["supply_chain_raw"].get("sustainable_packaging_pct")),
+
+                    a.get("audit_by", "Unknown"), a.get("standard"),
+                    a.get("report_number"),
+                    _parse_date(a.get("audit_date")),
+                    _parse_date(a.get("valid_until")),
+                    a.get("verification_level"),
+                ))
+
+                metric_id = cur.fetchone()[0]
+
+                # Certificates
+                for cert in a.get("certificates", []):
+                    cur.execute("""
+                        INSERT INTO certificates (metric_id, cert_type, cert_number, expiry_date)
+                        VALUES (%s, %s, %s, %s);
+                    """, (
+                        metric_id,
+                        cert.get("type", "Unknown"),
+                        cert.get("number"),
+                        _parse_date(cert.get("expiry")),
+                    ))
+
+                # Audit log — lưu cả RAW + DERIVED + warnings
+                cur.execute("""
+                    INSERT INTO audit_logs (action, entity_type, entity_id, detail)
+                    VALUES ('insert', 'esg_metrics', %s, %s);
+                """, (metric_id, json.dumps({
+                    "raw": raw_data,
+                    "derived": {k: v for k, v in computed.items()
+                                if k not in ("company", "reporting", "audit",
+                                             "emissions_raw", "energy_raw",
+                                             "water_raw", "waste_raw",
+                                             "supply_chain_raw")},
+                    "warnings": warnings,
+                }, ensure_ascii=False)))
+
+            conn.commit()
+            logger.info(f"Đã lưu metric_id={metric_id} | VGPI={computed['vgpi_score']}")
+            return metric_id, computed, warnings
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Lỗi lưu PostgreSQL")
+        raise HTTPException(500, f"Lỗi lưu PostgreSQL: {e}")
+
+
+# ============================================================
+# SAVE QDRANT
+# ============================================================
+def _embed_chunk(chunk: str):
+    return ollama.embeddings(model=OLLAMA_EMBED_MODEL, prompt=chunk)["embedding"]
+
+
+def save_to_qdrant(doc_id: int, text: str, company_name: str):
+    try:
+        # Chunk theo đoạn văn (tốt hơn cắt cứng)
+        chunks = _chunk_by_paragraphs(text, CHUNK_SIZE)
+        chunks = chunks[:MAX_CHUNKS]
+        if not chunks:
+            logger.warning(f"Không có chunk nào cho doc {doc_id}")
+            return
+
+        logger.info(f"Bắt đầu embed {len(chunks)} chunks cho doc {doc_id}...")
+
+        # Embed tuần tự hoặc concurrency thấp
+        vectors = []
+        for i, chunk in enumerate(chunks):
+            try:
+                vec = ollama.embeddings(
+                    model=OLLAMA_EMBED_MODEL,
+                    prompt=chunk,
+                )["embedding"]
+                vectors.append(vec)
+                if (i + 1) % 10 == 0:
+                    logger.info(f"  Đã embed {i+1}/{len(chunks)} chunks")
+            except Exception as e:
+                logger.error(f"  Embed chunk {i} lỗi: {e}")
+                vectors.append(None)
+
+        # Tạo points
+        points = []
+        for idx, (chunk, vec) in enumerate(zip(chunks, vectors)):
+            if vec is None or len(vec) != EMBED_DIM:
+                continue
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"vietgreen-{doc_id}-{idx}"))
+            points.append(PointStruct(
+                id=point_id, vector=vec,
+                payload={"doc_id": doc_id, "company_name": company_name,
+                         "content": chunk, "chunk_index": idx},
+            ))
+
+        if not points:
+            logger.warning(f"Không có point hợp lệ nào để upsert")
+            return
+
+        # ✅ Batch upsert để tránh overload
+        batch_size = 20
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
+            qdrant_client.upsert(
+                collection_name=QDRANT_COLLECTION,
+                points=batch,
+                wait=True,
+            )
+            logger.info(f"  Đã upsert batch {i//batch_size + 1} ({len(batch)} points)")
+
+        logger.info(f"✅ Đã upsert {len(points)} chunk cho doc {doc_id}")
+
+    except Exception as e:
+        logger.exception(f"save_to_qdrant lỗi")
+        raise HTTPException(500, f"Lỗi Qdrant: {type(e).__name__}: {e}")
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+@app.post("/api/v1/process-document")
+async def process_document(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Chỉ chấp nhận file PDF.")
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "File rỗng.")
+
+    raw_text = extract_text_from_pdf(pdf_bytes)
+    if not raw_text.strip():
+        raise HTTPException(400, "Không trích xuất được văn bản.")
+
+    logger.info(f"[1/4] PDF text len={len(raw_text)}")
+
+    # Bước 2: LLM extract RAW
+    raw_data = await anyio.to_thread.run_sync(extract_esg_json, raw_text)
+    logger.info(f"[2/4] LLM extract RAW OK")
+
+    # Bước 3: Tính toán + lưu DB
+    db_id, computed, warnings = await anyio.to_thread.run_sync(
+        save_to_postgres, raw_data
+    )
+    logger.info(f"[3/4] Đã tính toán + lưu DB, id={db_id}")
+
+    # Bước 4: Qdrant
+    try:
+        await anyio.to_thread.run_sync(
+            partial(save_to_qdrant, db_id, raw_text, raw_data["company"]["name"])
+        )
+        logger.info(f"[4/4] Đã lưu Qdrant cho doc_id={db_id}")
+    except Exception as e:
+        logger.error(f"Qdrant lỗi, rollback PG record_id={db_id}: {e}")
+        try:
+            with get_pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM esg_metrics WHERE id = %s", (db_id,))
+                conn.commit()
+        except Exception as rb_err:
+            logger.error(f"Rollback thất bại: {rb_err}")
+        raise HTTPException(500, f"Đã rollback do lỗi Qdrant: {e}")
+
+    return {
+        "status": "success",
+        "message": "Đã xử lý tài liệu thành công!",
+        "record_id": db_id,
+        "raw_data": raw_data,          # dữ liệu LLM trích
+        "computed": {
+            "vgpi_score": computed["vgpi_score"],
+            "energy_efficiency": computed["energy_efficiency"],
+            "co2_reduction": computed["co2_reduction"],
+            "waste_circularity": computed["waste_circularity"],
+            "renewable_energy_pct": computed["renewable_energy_pct"],
+            "supply_chain_sustainability": computed["supply_chain_sustainability"],
+            "total_tco2e": computed["total_tco2e"],
+            "reduction_pct": computed["reduction_pct"],
+            "intensity_tco2e_per_ton": computed["intensity_tco2e_per_ton"],
+            "renewable_pct": computed["renewable_pct"],
+            "intensity_kwh_per_ton": computed["intensity_kwh_per_ton"],
+            "water_recycling_rate": computed["water_recycling_rate"],
+            "waste_recycling_rate": computed["waste_recycling_rate"],
+        },
+        "warnings": warnings,          # cảnh báo consistency
+    }
+
+
+@app.get("/api/v1/metrics/{metric_id}")
+async def get_metric(metric_id: int):
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM esg_metrics WHERE id = %s", (metric_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy.")
+            cols = [d[0] for d in cur.description]
+    return _serialize_row(dict(zip(cols, row)))
+
+
+@app.get("/api/v1/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "qdrant_collection": QDRANT_COLLECTION,
+        "postgres_connected": True,
+    }
+</file>
+
+<file path="prompt_multi.py">
+"""Multi-pass extraction — chia nhỏ prompt, không có value mẫu để tránh LLM copy."""
+
+COMMON_HEADER = """Đọc báo cáo doanh nghiệp dưới đây và trích số liệu.
+
+BÁO CÁO:
+<BAO_CAO>
+{report_text}
+</BAO_CAO>
+
+"""
+
+# ============================================================
+# PASS 1: COMPANY + REPORTING
+# ============================================================
+PROMPT_COMPANY = COMMON_HEADER + """NHIỆM VỤ: Trích thông tin doanh nghiệp và kỳ báo cáo.
+
+QUY TẮC TUYỆT ĐỐI:
+- CHỈ trích dữ liệu CÓ THẬT trong báo cáo trên.
+- Nếu không tìm thấy → dùng null (KHÔNG được copy giá trị mẫu).
+- KHÔNG trả các chuỗi như "tên doanh nghiệp", "mã số thuế", "tiêu chuẩn" — đây là tên field, không phải giá trị.
+- Tất cả trường số phải là number.
+
+Trả JSON với các KEY sau (giữ nguyên tên key):
+
+{{
+  "company": {{
+    "name": <tên doanh nghiệp thật, ví dụ "Công ty Cổ phần Sữa Việt Nam">,
+    "tax_code": <mã số thuế, ví dụ "0300588569", hoặc null>,
+    "industry": <ngành nghề, ví dụ "Sản xuất thực phẩm">,
+    "industry_code": <mã VSIC, hoặc null>,
+    "facility_name": <tên nhà máy chính, hoặc null>,
+    "employee_count": <số nhân viên, number, hoặc null>,
+    "revenue_vnd": <tổng doanh thu năm, đơn vị VND, number, hoặc null>,
+    "production_output_ton": <tổng sản lượng năm, đơn vị tấn, number, hoặc null>
+  }},
+  "reporting": {{
+    "year": <năm báo cáo, number>,
+    "period": <kỳ báo cáo, ví dụ "01/01/2024 - 31/12/2024", hoặc null>,
+    "standard": <chuẩn áp dụng, ví dụ "GRI 2021", "ISO 14064-1", hoặc null>,
+    "baseline_year": <năm cơ sở để so sánh, number, hoặc null>
+  }}
+}}
+
+GỢI Ý TÌM KIẾM:
+- "sản lượng", "tổng sản lượng", "sản xuất", "công suất" → production_output_ton
+- "doanh thu", "tổng doanh thu", "net revenue" → revenue_vnd
+- "nhân viên", "lao động", "employees" → employee_count
+
+Chỉ trả JSON, không markdown, không giải thích. Bắt đầu trả JSON:
+"""
+
+
+# ============================================================
+# PASS 2: EMISSIONS + ENERGY
+# ============================================================
+PROMPT_EMISSIONS_ENERGY = COMMON_HEADER + """NHIỆM VỤ: Trích số liệu phát thải khí nhà kính và năng lượng.
+
+QUY TẮC TUYỆT ĐỐI:
+- CHỈ trích dữ liệu CÓ THẬT. Không có → null.
+- KHÔNG copy giá trị mẫu.
+- Tất cả trường số phải là number.
+- Đơn vị chuẩn hóa:
+    * Emissions: tấn CO₂ tương đương (tCO₂e). Nếu báo cáo ghi "nghìn tấn" → nhân 1000.
+    * Energy: kWh. Nếu báo cáo ghi MWh → nhân 1000. Nếu ghi GJ → nhân 277.78.
+
+Trả JSON với các KEY sau:
+
+{{
+  "emissions": {{
+    "scope1_tco2e": <phát thải trực tiếp, number>,
+    "scope2_tco2e": <phát thải gián tiếp từ điện, number>,
+    "scope3_tco2e": <phát thải chuỗi cung ứng, number>,
+    "baseline_total_tco2e": <tổng phát thải năm cơ sở, number>
+  }},
+  "energy": {{
+    "total_kwh": <tổng điện năng tiêu thụ, number>,
+    "grid_kwh": <điện lưới, number>,
+    "renewable_kwh": <điện tái tạo (mặt trời, gió, sinh khối), number>
+  }}
+}}
+
+GỢI Ý TÌM KIẾM — thuật ngữ có thể viết khác:
+- Phát thải: "phát thải", "khí nhà kính", "GHG", "CO₂", "CO2",
+             "tCO₂e", "tCO2e", "tấn CO₂ tương đương", "tấn CO2e"
+- Scope: "Scope 1", "Scope 2", "Scope 3", "phạm vi 1", "phạm vi 2", "phạm vi 3",
+         "phát thải trực tiếp", "phát thải gián tiếp"
+- Năng lượng: "kWh", "MWh", "GJ", "điện năng tiêu thụ", "tổng điện",
+              "năng lượng", "năng lượng tái tạo", "điện mặt trời", "solar"
+
+Chỉ trả JSON, không markdown, không giải thích. Bắt đầu trả JSON:
+"""
+
+
+# ============================================================
+# PASS 3: WATER + WASTE
+# ============================================================
+PROMPT_WATER_WASTE = COMMON_HEADER + """NHIỆM VỤ: Trích số liệu nước và chất thải.
+
+QUY TẮC TUYỆT ĐỐI:
+- CHỈ trích dữ liệu CÓ THẬT. Không có → null.
+- KHÔNG copy giá trị mẫu.
+- Tất cả trường số phải là number.
+- Đơn vị chuẩn hóa:
+    * Water: m³. Nếu báo cáo ghi "nghìn m³" → nhân 1000. Nếu ghi "lít" → chia 1000.
+    * Waste: tấn. Nếu báo cáo ghi kg → chia 1000. Nếu ghi "nghìn tấn" → nhân 1000.
+
+Trả JSON với các KEY sau:
+
+{{
+  "water": {{
+    "consumption_m3": <tổng nước tiêu thụ trong năm, number>,
+    "recycled_m3": <nước tái chế/tái sử dụng, number>
+  }},
+  "waste": {{
+    "total_ton": <tổng chất thải phát sinh, number>,
+    "recycled_ton": <chất thải tái chế, number>,
+    "landfill_ton": <chất thải chôn lấp, number>,
+    "hazardous_ton": <chất thải nguy hại, number>
+  }}
+}}
+
+GỢI Ý TÌM KIẾM — thuật ngữ có thể viết khác:
+- Nước: "nước", "nước tiêu thụ", "nước sử dụng", "nước cấp", "tổng lượng nước",
+        "m³", "m3", "mét khối"
+- Nước tái chế: "nước tái chế", "nước tái sử dụng", "nước tuần hoàn",
+                "recycled water", "nước thu hồi"
+- Chất thải: "chất thải", "chất thải rắn", "rác thải", "chất thải sinh hoạt",
+             "chất thải công nghiệp", "tấn", "kg"
+- Chất thải nguy hại: "chất thải nguy hại", "CTNH", "hazardous waste"
+- Tái chế: "tái chế", "thu hồi", "recycle"
+- Chôn lấp: "chôn lấp", "landfill", "đổ thải"
+
+Chỉ trả JSON, không markdown, không giải thích. Bắt đầu trả JSON:
+"""
+
+
+# ============================================================
+# PASS 4: SUPPLY CHAIN + AUDIT
+# ============================================================
+PROMPT_SUPPLY_AUDIT = COMMON_HEADER + """NHIỆM VỤ: Trích thông tin chuỗi cung ứng và kiểm toán.
+
+QUY TẮC TUYỆT ĐỐI:
+- CHỈ trích thông tin CÓ THẬT. Không có → null.
+- KHÔNG copy giá trị mẫu như "đơn vị kiểm toán", "tiêu chuẩn", "số báo cáo", "YYYY-MM-DD".
+- Nếu không tìm thấy audit_by → dùng null (KHÔNG dùng chuỗi "đơn vị kiểm toán").
+
+Trả JSON với các KEY sau:
+
+{{
+  "supply_chain": {{
+    "local_sourcing_pct": <phần trăm nguyên liệu nội địa (0-100), number>,
+    "certified_suppliers_count": <số nhà cung cấp có chứng nhận, number>,
+    "total_suppliers_count": <tổng số nhà cung cấp, number>,
+    "sustainable_packaging_pct": <phần trăm bao bì bền vững (0-100), number>
+  }},
+  "audit": {{
+    "audit_by": <TÊN THẬT của đơn vị kiểm toán, ví dụ "Deloitte Việt Nam", "KPMG", "BSI", "TÜV Rheinland", hoặc null>,
+    "standard": <chuẩn kiểm toán, ví dụ "ISO 14064-1:2018", "AA1000AS", hoặc null>,
+    "report_number": <số báo cáo kiểm toán, hoặc null>,
+    "audit_date": <ngày kiểm toán, format YYYY-MM-DD, hoặc null>,
+    "valid_until": <ngày hết hạn, format YYYY-MM-DD, hoặc null>,
+    "verification_level": <"limited" hoặc "reasonable", hoặc null>,
+    "certificates": <mảng các chứng chỉ, mỗi cái có type, number, expiry; nếu không có → []>
+  }}
+}}
+
+GỢI Ý TÌM KIẾM:
+- Nhà cung cấp: "nhà cung cấp", "supplier", "NCC", "đối tác"
+- Nguyên liệu nội địa: "nội địa", "local", "trong nước", "Việt Nam"
+- Bao bì: "bao bì", "packaging", "bao bì bền vững", "bao bì tái chế"
+- Kiểm toán: "kiểm toán", "audit", "bên thứ ba", "third party"
+- Đơn vị kiểm toán: "Deloitte", "KPMG", "PwC", "EY", "BSI", "TÜV", "SGS",
+                    "Bureau Veritas", "Intertek"
+- Chuẩn: "ISO 14064", "ISO 14001", "ISO 14067", "GRI", "AA1000", "GHG Protocol"
+- Chứng nhận: "chứng nhận", "certificate", "certified", "TCVN"
+
+Chỉ trả JSON, không markdown, không giải thích. Bắt đầu trả JSON:
+"""
+</file>
+
+<file path="prompt.py">
+EXTRACTION_PROMPT_TEMPLATE = """Trích xuất số liệu từ báo cáo doanh nghiệp và trả về JSON.
+
+BÁO CÁO:
+<BAO_CAO>
+{report_text}
+</BAO_CAO>
+
+Hãy tìm và trích các số liệu sau. Nếu không tìm thấy → null.
+
+{{
+  "company": {{
+    "name": "tên doanh nghiệp",
+    "tax_code": "mã số thuế",
+    "industry": "ngành nghề",
+    "employee_count": 0,
+    "revenue_vnd": 0,
+    "production_output_ton": 0
+  }},
+  "reporting": {{
+    "year": 2024,
+    "period": "Q1-Q4/2024",
+    "baseline_year": 2020
+  }},
+  "emissions": {{
+    "scope1_tco2e": 0,
+    "scope2_tco2e": 0,
+    "scope3_tco2e": 0,
+    "baseline_total_tco2e": 0
+  }},
+  "energy": {{
+    "total_kwh": 0,
+    "grid_kwh": 0,
+    "renewable_kwh": 0
+  }},
+  "water": {{
+    "consumption_m3": 0,
+    "recycled_m3": 0
+  }},
+  "waste": {{
+    "total_ton": 0,
+    "recycled_ton": 0,
+    "landfill_ton": 0,
+    "hazardous_ton": 0
+  }},
+  "supply_chain": {{
+    "local_sourcing_pct": 0,
+    "certified_suppliers_count": 0,
+    "total_suppliers_count": 0,
+    "sustainable_packaging_pct": 0
+  }},
+  "audit": {{
+    "audit_by": "đơn vị kiểm toán",
+    "standard": "tiêu chuẩn",
+    "audit_date": "YYYY-MM-DD",
+    "valid_until": "YYYY-MM-DD",
+    "certificates": []
+  }}
+}}
+
+Chỉ trả JSON, không giải thích. Bắt đầu:
+"""
+</file>
+
+<file path="query.py">
+from config import (
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION,
+    OLLAMA_EMBED_MODEL, OLLAMA_CHAT_MODEL,
+    RAG_TOP_K, RAG_SCORE_THRESHOLD,
+)
+from qdrant_client import QdrantClient
+import ollama, logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("vietgreen_query")
+
+client = QdrantClient(QDRANT_HOST, port=QDRANT_PORT)
+
+
+def ask_rag(question: str) -> str:
+    if not question.strip():
+        return "Vui lòng nhập câu hỏi."
+
+    query_vector = ollama.embeddings(model=OLLAMA_EMBED_MODEL, prompt=question)["embedding"]
+
+    resp = client.query_points(
+        collection_name=QDRANT_COLLECTION,
+        query=query_vector,
+        limit=RAG_TOP_K,
+        score_threshold=RAG_SCORE_THRESHOLD,
+        with_payload=True,
+    )
+
+    hits = resp.points or []
+    if not hits:
+        return "Tôi không biết (không tìm thấy thông tin)."
+
+    context = "\n---\n".join(h.payload.get("content", "") for h in hits)
+
+    prompt = f"""Dựa vào thông tin dưới đây, hãy trả lời câu hỏi.
+Nếu không có thông tin, trả lời: "Tôi không biết".
+
+Thông tin tham khảo:
+{context}
+
+Câu hỏi: {question}
+"""
+
+    try:
+        response = ollama.generate(model=OLLAMA_CHAT_MODEL, prompt=prompt)
+        return response.get("response", "").strip() or "Tôi không biết."
+    except Exception as e:
+        logger.exception("Lỗi Ollama chat")
+        return f"Lỗi: {e}"
+
+
+if __name__ == "__main__":
+    print(ask_rag("Điểm VGPI của Công ty VinFast là bao nhiêu?"))
+</file>
+
+<file path="requirements.txt">
+fastapi
+uvicorn[standard]
+python-multipart
+qdrant-client
+ollama
+pypdf
+psycopg2-binary
+pydantic
+python-dotenv
+anyio
+httpx
+pytest
+pytest-asyncio
+# --- OCR fallback cho PDF dạng ảnh/scan (tùy chọn, xem ENABLE_OCR_FALLBACK trong config.py) ---
+# Cần cài thêm gói hệ thống: apt install tesseract-ocr tesseract-ocr-vie poppler-utils
+pytesseract
+pdf2image
+</file>
+
+<file path="schemas.py">
+"""Schemas chứa RAW DATA — số tuyệt đối trích từ báo cáo.
+Các chỉ số phái sinh (VGPI, %, intensity) được tính trong formulas.py.
+"""
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List
+
+
+# ============================================================
+# COMPANY
+# ============================================================
+class Company(BaseModel):
+    name: str = "Unknown"
+    tax_code: Optional[str] = None
+    industry: Optional[str] = None
+    industry_code: Optional[str] = None
+    facility_name: Optional[str] = None
+    employee_count: Optional[int] = None
+    revenue_vnd: Optional[float] = None
+    production_output_ton: Optional[float] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def default_name(cls, v):
+        return v if v else "Unknown"
+
+
+# ============================================================
+# REPORTING
+# ============================================================
+class Reporting(BaseModel):
+    year: Optional[int] = None
+    period: Optional[str] = None
+    standard: Optional[str] = None
+    baseline_year: Optional[int] = None
+
+
+# ============================================================
+# EMISSIONS — CHỈ SỐ TUYỆT ĐỐI (tCO2e)
+# Không có reduction_pct, intensity — Python tự tính
+# ============================================================
+class EmissionsRaw(BaseModel):
+    scope1_tco2e: float = 0.0
+    scope2_tco2e: float = 0.0
+    scope3_tco2e: float = 0.0
+    baseline_total_tco2e: float = 0.0
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def none_to_zero(cls, v):
+        return 0.0 if v is None else v
+
+
+# ============================================================
+# ENERGY — CHỈ SỐ TUYỆT ĐỐI (kWh)
+# ============================================================
+class EnergyRaw(BaseModel):
+    total_kwh: float = 0.0
+    grid_kwh: float = 0.0
+    renewable_kwh: float = 0.0
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def none_to_zero(cls, v):
+        return 0.0 if v is None else v
+
+
+# ============================================================
+# WATER — CHỈ SỐ TUYỆT ĐỐI (m3)
+# ============================================================
+class WaterRaw(BaseModel):
+    consumption_m3: float = 0.0
+    recycled_m3: float = 0.0
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def none_to_zero(cls, v):
+        return 0.0 if v is None else v
+
+
+# ============================================================
+# WASTE — CHỈ SỐ TUYỆT ĐỐI (tấn)
+# ============================================================
+class WasteRaw(BaseModel):
+    total_ton: float = 0.0
+    recycled_ton: float = 0.0
+    landfill_ton: float = 0.0
+    hazardous_ton: float = 0.0
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def none_to_zero(cls, v):
+        return 0.0 if v is None else v
+
+
+# ============================================================
+# SUPPLY CHAIN — cần cho trụ cột 5 của VGPI
+# ============================================================
+class SupplyChainRaw(BaseModel):
+    local_sourcing_pct: float = 0.0           # % nguyên liệu nội địa
+    certified_suppliers_count: int = 0        # số NCC có chứng nhận
+    total_suppliers_count: int = 0            # tổng số NCC
+    sustainable_packaging_pct: float = 0.0    # % bao bì bền vững
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def none_to_zero(cls, v):
+        if v is None:
+            return 0
+        return v
+
+
+# ============================================================
+# AUDIT
+# ============================================================
+class Certificate(BaseModel):
+    type: str = "Unknown"
+    number: Optional[str] = None
+    expiry: Optional[str] = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def default_type(cls, v):
+        return v if v else "Unknown"
+
+
+class Audit(BaseModel):
+    audit_by: str = "Unknown"
+    standard: Optional[str] = None
+    report_number: Optional[str] = None
+    audit_date: Optional[str] = None
+    valid_until: Optional[str] = None
+    verification_level: Optional[str] = None
+    certificates: List[Certificate] = Field(default_factory=list)
+
+    @field_validator("audit_by", mode="before")
+    @classmethod
+    def default_audit_by(cls, v):
+        return v if v else "Unknown"
+
+    @field_validator("certificates", mode="before")
+    @classmethod
+    def none_to_empty_list(cls, v):
+        return v if v else []
+
+
+# ============================================================
+# ROOT — chỉ chứa RAW
+# ============================================================
+class EsgExtraction(BaseModel):
+    """Schema gốc — CHỈ chứa RAW data từ báo cáo.
+    Mọi chỉ số phái sinh (VGPI, %, intensity) sẽ tính bằng formulas.py
+    """
+    company: Company = Field(default_factory=Company)
+    reporting: Reporting = Field(default_factory=Reporting)
+    emissions: EmissionsRaw = Field(default_factory=EmissionsRaw)
+    energy: EnergyRaw = Field(default_factory=EnergyRaw)
+    water: WaterRaw = Field(default_factory=WaterRaw)
+    waste: WasteRaw = Field(default_factory=WasteRaw)
+    supply_chain: SupplyChainRaw = Field(default_factory=SupplyChainRaw)
+    audit: Audit = Field(default_factory=Audit)
+
+    @field_validator(
+        "company", "reporting", "emissions", "energy",
+        "water", "waste", "supply_chain", "audit",
+        mode="before",
+    )
+    @classmethod
+    def coerce_none_to_empty_dict(cls, v):
+        return {} if v is None else v
+</file>
+
+<file path="validators.py">
+"""Kiểm tra tính nhất quán của dữ liệu sau khi tính toán."""
+import logging
+from typing import Dict, Any, List
+
+logger = logging.getLogger("vietgreen_validators")
+
+
+def validate_consistency(computed: Dict[str, Any]) -> List[str]:
+    """
+    Trả về list cảnh báo (rỗng = không có vấn đề).
+    """
+    warnings = []
+
+    # --- 1. Tổng Scope = Total ---
+    e = computed.get("emissions_raw", {})
+    s1, s2, s3 = (
+        e.get("scope1_tco2e", 0),
+        e.get("scope2_tco2e", 0),
+        e.get("scope3_tco2e", 0),
+    )
+    total = computed.get("total_tco2e", 0)
+    if total > 0 and abs((s1 + s2 + s3) - total) > 1:
+        warnings.append(
+            f"Tổng Scope 1+2+3 ({s1+s2+s3}) ≠ tổng tính được ({total})"
+        )
+
+    # --- 2. Reduction % không âm vô lý ---
+    reduction = computed.get("reduction_pct", 0)
+    if reduction < -100 or reduction > 100:
+        warnings.append(f"reduction_pct={reduction}% nằm ngoài [-100, 100]")
+
+    # --- 3. Renewable kWh ≤ Total kWh ---
+    en = computed.get("energy_raw", {})
+    if en.get("renewable_kwh", 0) > en.get("total_kwh", 0) + 0.01:
+        warnings.append(
+            f"renewable_kwh ({en.get('renewable_kwh')}) > total_kwh ({en.get('total_kwh')})"
+        )
+
+    # --- 4. Recycled ≤ Total (nước, rác) ---
+    w = computed.get("water_raw", {})
+    if w.get("recycled_m3", 0) > w.get("consumption_m3", 0) + 0.01:
+        warnings.append("recycled_m3 > consumption_m3")
+
+    ws = computed.get("waste_raw", {})
+    if ws.get("recycled_ton", 0) > ws.get("total_ton", 0) + 0.01:
+        warnings.append("recycled_ton > total_ton")
+
+    if ws.get("landfill_ton", 0) > ws.get("total_ton", 0) + 0.01:
+        warnings.append("landfill_ton > total_ton")
+
+    # --- 5. VGPI trong [0, 100] ---
+    vgpi = computed.get("vgpi_score", 0)
+    if vgpi < 0 or vgpi > 100:
+        warnings.append(f"VGPI={vgpi} nằm ngoài [0, 100]")
+
+    # --- 6. Không có sản lượng → VGPI có thể sai ---
+    if not computed.get("company", {}).get("production_output_ton"):
+        warnings.append(
+            "Thiếu production_output_ton → intensity & VGPI có thể không chính xác"
+        )
+
+    for w_ in warnings:
+        logger.warning(f"⚠️  {w_}")
+
+    return warnings
+</file>
+
+</files>
